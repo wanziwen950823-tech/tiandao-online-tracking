@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>天道扫码 · 联网运单登记 v0.2</title>
+  <style>
+    :root{
+      --bg:#020617;--panel:#02091A;--card:#020617;
+      --muted:#9ca3af;--text:#e5e7eb;--accent:#38bdf8;
+      --good:#22c55e;--bad:#f97373;--line:#1f2937;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans",sans-serif;
+      background:radial-gradient(circle at top,#0b1120 0,#020617 55%,#000 100%);
+      color:var(--text);
+    }
+    .wrap{max-width:1100px;margin:0 auto;padding:20px;}
+    h1{margin:0 0 6px;font-size:18px;}
+    .sub{font-size:12px;color:var(--muted);}
+    .panel{
+      margin-top:14px;
+      background:radial-gradient(circle at top,#020617,#020617);
+      border-radius:14px;
+      border:1px solid #111827;
+      box-shadow:0 18px 45px rgba(0,0,0,.75);
+      padding:14px 16px 18px;
+    }
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    input,select,button{
+      font:inherit;
+      border-radius:9px;
+      border:1px solid #1f2937;
+      background:#020617;
+      color:var(--text);
+      height:32px;
+      padding:0 10px;
+      outline:none;
+    }
+    input::placeholder{color:#6b7280;}
+    .btn{
+      cursor:pointer;
+      background:linear-gradient(135deg,#0ea5e9,#0369a1);
+      border-color:#0284c7;
+      color:#e5f3ff;
+      padding:0 16px;
+      font-weight:500;
+      box-shadow:0 0 0 1px #0ea5e965 inset,0 8px 18px rgba(15,118,190,.65);
+    }
+    .btn:hover{filter:brightness(1.05);}
+    .btn.sec{
+      background:linear-gradient(135deg,#111827,#020617);
+      border-color:#374151;
+      box-shadow:none;
+    }
+    .status{
+      margin-top:8px;
+      font-size:12px;
+      color:var(--muted);
+    }
+    table{
+      margin-top:10px;
+      width:100%;
+      border-collapse:collapse;
+      font-size:12px;
+    }
+    thead{background:#020617;}
+    th,td{
+      padding:6px 8px;
+      border-bottom:1px solid #111827;
+      text-align:left;
+      white-space:nowrap;
+    }
+    tbody tr:nth-child(even){background:#020617;}
+    .tag-badge{
+      display:inline-flex;
+      padding:2px 7px;
+      border-radius:999px;
+      border:1px solid #1d4ed8;
+      color:#bfdbfe;
+      font-size:11px;
+      background:rgba(37,99,235,.15);
+    }
+    .time{color:#9ca3af;font-size:11px;}
+    .err{color:#fecaca;}
+    .ok{color:#bbf7d0;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>天道扫码 · 联网运单登记 v0.2</h1>
+  <div class="sub">
+    当前版本：只做「运单登记」联网测试，数据直接写入 Supabase 的 <code>tracking</code> 表。
+  </div>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:8px;">
+      <input id="tagInput" style="min-width:140px;flex:1;"
+             placeholder="标签（如 U1 / U2，可选）"/>
+      <input id="trackingInput" style="min-width:200px;flex:2;"
+             placeholder="扫描或输入运单号（UPS 1Z... / FedEx 数字）"/>
+      <select id="carrierMode" style="width:110px;">
+        <option value="auto">自动识别</option>
+        <option value="UPS">强制 UPS</option>
+        <option value="FedEx">强制 FedEx</option>
+      </select>
+      <input id="noteInput" style="min-width:180px;flex:1;"
+             placeholder="备注（可选）"/>
+      <button id="btnSave" class="btn">登记 + 写入云端</button>
+      <button id="btnRefresh" class="btn sec">刷新列表</button>
+    </div>
+    <div id="status" class="status">就绪。</div>
+
+    <table>
+      <thead>
+      <tr>
+        <th style="width:60px;">ID</th>
+        <th style="width:140px;">时间</th>
+        <th style="width:80px;">标签</th>
+        <th>运单号</th>
+        <th style="width:80px;">承运商</th>
+        <th>备注</th>
+      </tr>
+      </thead>
+      <tbody id="listBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Supabase JS v2 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  // ========= 1. 这里换成你自己的 Supabase 项目信息 =========
+  // 👇 把这两行替换成你的真实 URL 和 anon key（跟测试页面里用的一模一样）
+  const SUPABASE_URL = 'https://vkqnvvnidkwtzudflmop.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZrcW52dm5pZGt3dHp1ZGZsbW9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQxNjg2MzEsImV4cCI6MjA3OTc0NDYzMX0.du7y_gtrz_AiKhQljrARkCMiOtsgxM47ww9HDCCOqAQ';
+
+  const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const $ = id => document.getElementById(id);
+  const statusEl = $('status');
+  const listBody = $('listBody');
+
+  function setStatus(msg, cls){
+    statusEl.textContent = msg;
+    statusEl.className = 'status ' + (cls || '');
+  }
+
+  // ========= 2. 运单识别（和本地版本类似的规则） =========
+  function normalizeTracking(raw, forceType){
+    let s = (raw || '').toUpperCase().trim().replace(/\s+/g,'');
+    let type = 'Unknown';
+    if(forceType && forceType !== 'auto') type = forceType;
+    if(!forceType || forceType === 'auto'){
+      if(/^1Z[0-9A-Z]{16}$/.test(s)) type = 'UPS';
+      else if(/^\d{12,34}$/.test(s)) type = 'FedEx';
+    }
+    // FedEx：只保留后 12 位
+    if(type === 'FedEx' && /^\d+$/.test(s) && s.length > 12){
+      s = s.slice(-12);
+    }
+    return { tracking: s, type };
+  }
+
+  // ========= 3. 刷新列表 =========
+  async function refreshList(){
+    setStatus('正在从 Supabase 读取数据…');
+    listBody.innerHTML = '';
+    try{
+      const { data, error } = await client
+        .from('tracking')
+        .select('*')
+        .order('id',{ascending:false})
+        .limit(50);
+
+      if(error){
+        console.error('读取错误', error);
+        setStatus('读取失败：' + (error.message || error), 'err');
+        return;
+      }
+
+      if(!data || !data.length){
+        setStatus('连接成功，但当前 tracking 表没有数据。', 'ok');
+        return;
+      }
+
+      setStatus('读取成功，共 ' + data.length + ' 条。','ok');
+      data.forEach(row=>{
+        const tr = document.createElement('tr');
+        const dt = new Date(row.created_at);
+        const timeStr = isNaN(dt) ? (row.created_at || '') :
+          dt.toLocaleString('zh-CN',{hour12:false});
+
+        tr.innerHTML =
+          `<td>${row.id}</td>`+
+          `<td class="time">${timeStr}</td>`+
+          `<td>${row.tag_text ? '<span class="tag-badge">'+row.tag_text+'</span>' : ''}</td>`+
+          `<td>${row.tracking_no||''}</td>`+
+          `<td>${row.carrier||''}</td>`+
+          `<td>${row.note||''}</td>`;
+        listBody.appendChild(tr);
+      });
+
+    }catch(err){
+      console.error('刷新时异常', err);
+      setStatus('读取失败（浏览器 Fetch 错误）：' + err, 'err');
+    }
+  }
+
+  // ========= 4. 写入一条 =========
+  async function saveOne(){
+    const tag = $('tagInput').value.trim();
+    const rawTracking = $('trackingInput').value.trim();
+    const mode = $('carrierMode').value;
+    const note = $('noteInput').value.trim();
+
+    if(!rawTracking){
+      alert('请先输入运单号');
+      $('trackingInput').focus();
+      return;
+    }
+
+    const { tracking, type } = normalizeTracking(rawTracking, mode);
+    if(!tracking || (type!=='UPS' && type!=='FedEx')){
+      alert('运单格式不正确，请确认是否 UPS 1Z... 或 FedEx 数字。');
+      return;
+    }
+
+    setStatus('正在写入 Supabase…');
+    try{
+      const { data, error } = await client
+        .from('tracking')
+        .insert([{
+          tag_text: tag || null,
+          tracking_no: tracking,
+          carrier: type,
+          note: note || null
+        }])
+        .select();
+
+      if(error){
+        console.error('写入错误', error);
+        alert('写入失败：' + (error.message || error));
+        setStatus('写入失败。', 'err');
+        return;
+      }
+
+      alert('写入成功！');
+      $('trackingInput').value = '';
+      $('noteInput').value = '';
+      setStatus('写入成功，正在刷新列表…', 'ok');
+      await refreshList();
+
+    }catch(err){
+      console.error('写入时发生异常', err);
+      alert('写入失败（浏览器 Fetch 错误）：' + err);
+      setStatus('写入失败（Fetch 错误）。', 'err');
+    }
+  }
+
+  $('btnSave').addEventListener('click', saveOne);
+  $('btnRefresh').addEventListener('click', refreshList);
+
+  // 页面加载后自动刷新一次
+  refreshList();
+</script>
+</body>
+</html>
